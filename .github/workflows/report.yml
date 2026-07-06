@@ -1,0 +1,28 @@
+name: Send livestream reports
+
+on:
+  schedule:
+    # 19:00 UTC daily = 1:00/2:00 PM Central. The script itself decides which
+    # churches are due (daily / weekly=Sunday / monthly=1st).
+    - cron: "0 19 * * *"
+  workflow_dispatch: {}   # manual "Run workflow" button for testing
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r report/requirements.txt
+      - run: python report/report.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          FACEBOOK_APP_SECRET: ${{ secrets.FACEBOOK_APP_SECRET }}
+          GRAPH_API_VERSION: v21.0
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_FROM_EMAIL: reports@omnignis.com
