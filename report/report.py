@@ -35,7 +35,7 @@ ENC_KEY = base64.b64decode(os.environ["TOKEN_ENCRYPTION_KEY"])
 APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
 GRAPH_VERSION = os.environ.get("GRAPH_API_VERSION", "v21.0")
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
-FROM_EMAIL = os.environ.get("REPORT_FROM_EMAIL", "reports@omnignis.com")
+FROM_EMAIL = os.environ.get("REPORT_FROM_EMAIL", "reports@send.omnignis.com")
 
 GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 SB_HEADERS = {

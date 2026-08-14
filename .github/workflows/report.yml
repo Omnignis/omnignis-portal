@@ -25,4 +25,4 @@ jobs:
           FACEBOOK_APP_SECRET: ${{ secrets.FACEBOOK_APP_SECRET }}
           GRAPH_API_VERSION: v21.0
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          REPORT_FROM_EMAIL: reports@omnignis.com
+          REPORT_FROM_EMAIL: reports@send.omnignis.com

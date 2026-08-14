@@ -67,7 +67,7 @@ Repo Settings > Secrets and variables > Actions, add:
 Test with the **Run workflow** button before trusting the cron.
 
 ### 5. Resend
-Verify the `omnignis.com` sending domain and make sure `reports@omnignis.com`
+Verify the `send.omnignis.com` sending domain in Resend and make sure `reports@send.omnignis.com`
 is allowed as a from address.
 
 ## Security model (unchanged from v1, extended)
