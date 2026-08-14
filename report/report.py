@@ -19,6 +19,7 @@ during your first test run, and adjusted here if Facebook returns an error.
 
 import os
 import io
+import re
 import base64
 import hmac
 import hashlib
@@ -43,6 +44,15 @@ SB_HEADERS = {
     "Authorization": f"Bearer {SERVICE_KEY}",
     "Content-Type": "application/json",
 }
+
+# Access tokens end up inside requests' exception messages because they travel
+# as query parameters, and those messages get printed to CI logs. GitHub cannot
+# mask them (they are decrypted at runtime, not repo secrets), so redact here.
+_SECRET_PARAM_RE = re.compile(r"((?:access_token|appsecret_proof)=)[^&\s\"']+")
+
+
+def redact(value) -> str:
+    return _SECRET_PARAM_RE.sub(r"\1[REDACTED]", str(value))
 
 
 # ----------------------- helpers -----------------------
@@ -116,6 +126,12 @@ def fetch_metrics(video_id: str, token: str) -> dict:
         params["appsecret_proof"] = proof
     r = requests.get(f"{GRAPH}/{video_id}/video_insights", params=params, timeout=30)
     data = r.json()
+    # Without this check a Graph error (expired token, rate limit, renamed
+    # metric) silently produced a report of all zeros AND advanced
+    # last_report_at, permanently consuming the reporting window. Raising
+    # instead skips this church for this run and leaves the window open.
+    if "error" in data:
+        raise RuntimeError(f"Graph insights error: {data['error'].get('message')}")
     out = {"total_views": 0, "unique_viewers": 0}
     for item in data.get("data", []):
         name = item.get("name")
@@ -213,6 +229,7 @@ def main():
     }
 
     processed = 0
+    failed = 0
     for p in profiles:
         conn = connections.get(p["id"])
         if not conn:
@@ -249,18 +266,23 @@ def main():
                 f"<p>Hello {p['church_name']},</p>"
                 f"<p>Attached is your livestream attendance report for <b>{period}</b> "
                 f"({len(rows)} livestream{'s' if len(rows) != 1 else ''}).</p>"
-                f"<p>— Omnignis Technologies</p>"
+                f"<p>Omnignis Technologies</p>"
             )
             fname = f"{p['church_name'].replace(' ', '_')}_livestream_report_{today.date()}.xlsx"
-            send_email(recipients, f"Livestream report — {p['church_name']}", html, fname, xlsx)
+            send_email(recipients, f"Livestream report: {p['church_name']}", html, fname, xlsx)
 
             sb_patch("profiles", f"id=eq.{p['id']}", {"last_report_at": today.isoformat()})
             processed += 1
             print(f"OK: sent report to {p['church_name']} ({len(rows)} videos)")
         except Exception as e:
-            print(f"ERROR for {p.get('church_name')}: {e}")
+            failed += 1
+            print(f"ERROR for {p.get('church_name')}: {redact(e)}")
 
-    print(f"Done. Reports sent: {processed}")
+    print(f"Done. Reports sent: {processed}. Failures: {failed}.")
+    if failed:
+        # Exit non-zero so the scheduled workflow goes red and GitHub emails us.
+        # Silent green runs hid months of expired-token failures.
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

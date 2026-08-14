@@ -1,6 +1,6 @@
 // POST /api/facebook/disconnect
 // Revokes the app's permissions on Facebook (best effort), then deletes the
-// stored connection row — tokens included — regardless.
+// stored connection row, tokens included, regardless.
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { getUserFromRequest } from '../../../../lib/serverAuth';

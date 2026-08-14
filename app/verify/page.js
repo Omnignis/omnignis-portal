@@ -46,8 +46,8 @@ export default function Verify() {
       <div className="card reveal d2">
         <h1>Check your <span className="em">email</span></h1>
         <p className="sub">We sent a 6-digit code to <b style={{ color: 'var(--cream)' }}>{email || 'your email'}</b>. Enter it below to activate your account.</p>
-        {error && <div className="error">{error}</div>}
-        {notice && <div className="notice">{notice}</div>}
+        {error && <div className="error" role="alert">{error}</div>}
+        {notice && <div className="notice" role="status">{notice}</div>}
         <form onSubmit={submit}>
           {!email && (
             <div className="field">

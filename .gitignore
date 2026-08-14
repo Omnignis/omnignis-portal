@@ -1,5 +1,16 @@
 node_modules/
 .next/
-.env
-.env.local
+out/
+
+# Env files. The broad glob matters: `vercel env pull` writes
+# .env.development.local by default, and these hold the service role key,
+# TOKEN_ENCRYPTION_KEY, FACEBOOK_APP_SECRET and RESEND_API_KEY.
+.env*
+!.env.example
+
+.vercel/
 __pycache__/
+*.pyc
+venv/
+.venv/
+.DS_Store

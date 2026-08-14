@@ -1,5 +1,12 @@
 // POST /api/facebook/start
 // Creates a short-lived CSRF state and returns the Facebook OAuth dialog URL.
+//
+// The state is stored in two places that must agree at callback time:
+//   1. the oauth_states table, which maps state -> profile_id
+//   2. an HttpOnly cookie on this browser
+// Requiring both means a state minted by one account cannot be completed in a
+// different browser, which is what stops an attacker from binding a victim's
+// Facebook page to the attacker's portal account.
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { getUserFromRequest } from '../../../../lib/serverAuth';
@@ -8,6 +15,8 @@ import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
 export const dynamic = 'force-dynamic';
 
 const SCOPES = 'pages_show_list,pages_read_engagement,read_insights';
+export const STATE_COOKIE = 'fb_oauth_state';
+const STATE_TTL_SECONDS = 600;
 
 export async function POST(request) {
   const user = await getUserFromRequest(request);
@@ -19,7 +28,10 @@ export async function POST(request) {
   // Clear any stale states for this user, then insert the new one.
   await admin.from('oauth_states').delete().eq('profile_id', user.id);
   const { error } = await admin.from('oauth_states').insert({ state, profile_id: user.id });
-  if (error) return NextResponse.json({ error: 'Could not start the connection.' }, { status: 500 });
+  if (error) {
+    console.error('oauth_states insert failed:', error);
+    return NextResponse.json({ error: 'Could not start the connection.' }, { status: 500 });
+  }
 
   const v = process.env.GRAPH_API_VERSION || 'v21.0';
   const redirectUri = `${process.env.PORTAL_URL}/api/facebook/callback`;
@@ -30,5 +42,15 @@ export async function POST(request) {
     `&state=${state}` +
     `&scope=${encodeURIComponent(SCOPES)}`;
 
-  return NextResponse.json({ url });
+  const res = NextResponse.json({ url });
+  // SameSite=Lax still sends this on the top-level GET redirect back from
+  // facebook.com, which is exactly the navigation the callback receives.
+  res.cookies.set(STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: STATE_TTL_SECONDS,
+  });
+  return res;
 }

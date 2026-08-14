@@ -34,7 +34,7 @@ export default function Forgot() {
         ) : (
           <>
             <p className="sub">Enter your sign-in email and we&rsquo;ll send you a reset link.</p>
-            {error && <div className="error">{error}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="email">Email</label>

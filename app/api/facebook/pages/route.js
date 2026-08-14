@@ -1,4 +1,4 @@
-// GET /api/facebook/pages — list the pages the signed-in church granted us.
+// GET /api/facebook/pages: list the pages the signed-in church granted us.
 // Only id + name are ever sent to the browser; tokens stay server-side.
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';

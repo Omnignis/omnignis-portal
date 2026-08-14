@@ -1,5 +1,5 @@
 -- =========================================================
--- Omnignis Church Portal — Supabase schema (v2)
+-- Omnignis Church Portal: Supabase schema (v2)
 -- Run in Supabase: SQL Editor > New query > paste > Run.
 -- Safe to re-run: tables use IF NOT EXISTS, columns use
 -- idempotent ALTERs, and policies are guarded with DO blocks.
@@ -96,3 +96,40 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ---- Backfill: profiles for users who signed up before this schema existed ----
+-- The trigger above only fires on INSERT into auth.users, so any account created
+-- before the schema was applied has no profiles row and the dashboard renders
+-- empty. Idempotent: the LEFT JOIN means re-running inserts nothing.
+insert into public.profiles (id, church_name, destination_emails, report_frequency)
+select u.id,
+       coalesce(u.raw_user_meta_data->>'church_name', 'My Church'),
+       coalesce(u.raw_user_meta_data->>'destination_emails', u.email),
+       coalesce(u.raw_user_meta_data->>'report_frequency', 'weekly')
+from auth.users u
+left join public.profiles p on p.id = u.id
+where p.id is null;
+
+-- ============================================================
+-- Column-level grants (added after security review, 2026-08-14)
+--
+-- RLS in Postgres is ROW level, not COLUMN level. The fb_select_own policy
+-- above correctly limits a user to their own row, but Supabase's default
+-- table-wide SELECT grant meant that row included token_ciphertext and
+-- user_token_ciphertext. The dashboard was in fact selecting the ciphertext.
+--
+-- These grants enforce the boundary the comments above already claimed.
+-- Re-runnable: grant/revoke are idempotent.
+-- service_role is unaffected and keeps full access for the server routes
+-- and the scheduled report job.
+-- ============================================================
+
+revoke select on public.facebook_connections from authenticated;
+grant  select (profile_id, page_id, page_name, connected_at)
+  on public.facebook_connections to authenticated;
+
+-- last_report_at is scheduling state owned by report.py. A client that could
+-- write it could silently stop its own reports, or force a huge back-fill.
+revoke update on public.profiles from authenticated;
+grant  update (church_name, destination_emails, report_frequency, business_address, phone)
+  on public.profiles to authenticated;

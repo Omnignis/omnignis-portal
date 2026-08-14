@@ -34,7 +34,7 @@ export default function Login() {
       <div className="card reveal d2">
         <h1>Welcome <span className="em">back</span></h1>
         <p className="sub">Sign in to your church&rsquo;s reporting dashboard.</p>
-        {error && <div className="error">{error}</div>}
+        {error && <div className="error" role="alert">{error}</div>}
         <form onSubmit={submit}>
           <div className="field">
             <label htmlFor="email">Email</label>

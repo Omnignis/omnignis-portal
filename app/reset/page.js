@@ -43,8 +43,8 @@ export default function Reset() {
           </p>
         ) : (
           <>
-            <p className="sub">You&rsquo;re verified — set a new password for your account.</p>
-            {error && <div className="error">{error}</div>}
+            <p className="sub">You&rsquo;re verified. Set a new password for your account.</p>
+            {error && <div className="error" role="alert">{error}</div>}
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="pw">New password</label>
