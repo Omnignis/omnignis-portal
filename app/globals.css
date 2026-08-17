@@ -95,7 +95,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ember);b
 input:focus-visible,select:focus-visible{outline:none}
 .hint{color:var(--muted);font-size:13px;margin-top:6px}
 
-.code-input{letter-spacing:.5em;text-align:center;font-size:24px;font-family:var(--mono)}
+/* Sized for up to ten digits: Supabase OTP length is per-project. */
+.code-input{letter-spacing:.34em;text-align:center;font-size:22px;font-family:var(--mono)}
+.code-input::placeholder{letter-spacing:normal;font-size:15px;font-family:var(--sans)}
 
 /* ---- buttons ---- */
 .btn{
@@ -259,7 +261,7 @@ input:focus-visible,select:focus-visible{outline:none}
 /* iOS Safari force-zooms the viewport on focus when an input is under 16px,
    and does not zoom back out on blur. */
 input,select,textarea{font-size:16px}
-.code-input{font-size:24px}
+.code-input{font-size:22px}
 
 /* ---------- Support note (optional donation) ----------
    Intentionally quieter than a .card: no ember edge, no lift, muted type.

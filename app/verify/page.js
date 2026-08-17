@@ -7,6 +7,7 @@ import Brand from '../../components/Brand';
 export default function Verify() {
   const router = useRouter();
   const [email, setEmail] = useState('');
+  const [emailFromLink, setEmailFromLink] = useState(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -15,7 +16,9 @@ export default function Verify() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setEmail(params.get('email') || '');
+    const fromLink = params.get('email') || '';
+    setEmail(fromLink);
+    setEmailFromLink(!!fromLink);
   }, []);
 
   useEffect(() => {
@@ -29,7 +32,19 @@ export default function Verify() {
     setError(''); setLoading(true);
     const { error } = await supabase.auth.verifyOtp({ email, token: code.trim(), type: 'signup' });
     setLoading(false);
-    if (error) { setError('That code didn\u2019t work. Check the digits and try again, or resend a fresh one.'); return; }
+    if (error) {
+      // The most common failure here is an expired code, not a mistyped one.
+      // Telling someone to re-check correct digits sends them in a loop.
+      const msg = (error.message || '').toLowerCase();
+      if (msg.includes('expired')) {
+        setError('That code has expired. Send a fresh one and enter it within the hour.');
+      } else if (code.length < 6) {
+        setError('That code looks too short. Enter every digit from the email.');
+      } else {
+        setError('That code was not accepted. Check you copied all of it, or send a fresh one.');
+      }
+      return;
+    }
     router.replace('/dashboard');
   }
 
@@ -46,11 +61,11 @@ export default function Verify() {
       <Brand />
       <div className="card reveal d2">
         <h1>Check your <span className="em">email</span></h1>
-        <p className="sub">We sent a 6-digit code to <b style={{ color: 'var(--cream)' }}>{email || 'your email'}</b>. Enter it below to activate your account.</p>
+        <p className="sub">We sent a code to <b style={{ color: 'var(--cream)' }}>{email || 'your email'}</b>. Enter the whole code below to activate your account.</p>
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="notice" role="status">{notice}</div>}
         <form onSubmit={submit}>
-          {!email && (
+          {!emailFromLink && (
             <div className="field">
               <label htmlFor="em">Email</label>
               <input id="em" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
@@ -58,10 +73,16 @@ export default function Verify() {
           )}
           <div className="field">
             <label htmlFor="code">Verification code</label>
-            <input id="code" className="code-input" inputMode="numeric" pattern="[0-9]*" maxLength={6}
-                   value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} placeholder="••••••" required />
+            {/* Supabase's GOTRUE_MAILER_OTP_LENGTH is per-project and is 6 on some
+                projects and 8 on others. maxLength={6} silently truncated an
+                8-digit code, so it could never verify. Accept 6 to 10 and let
+                verifyOtp be the authority on validity. */}
+            <input id="code" className="code-input" inputMode="numeric" pattern="[0-9]*"
+                   autoComplete="one-time-code" maxLength={10} minLength={6}
+                   value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                   placeholder="Enter your code" required />
           </div>
-          <button className="btn btn-ember" disabled={loading || code.length !== 6}>
+          <button className="btn btn-ember" disabled={loading || code.length < 6}>
             {loading ? <span className="spinner" /> : 'Verify and continue'}
           </button>
         </form>
