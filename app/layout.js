@@ -1,4 +1,5 @@
 import './globals.css';
+import CardGlow from '../components/CardGlow';
 
 export const metadata = {
   title: 'Omnignis Church Portal',
@@ -9,7 +10,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <CardGlow />
+      </body>
     </html>
   );
 }

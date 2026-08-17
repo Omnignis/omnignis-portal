@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { useRedirectIfSignedIn } from '../../lib/useRedirectIfSignedIn';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -14,6 +15,7 @@ export default function Signup() {
   const [destMode, setDestMode] = useState('same'); // 'same' | 'custom'
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const checking = useRedirectIfSignedIn(router);
 
   function set(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
 
@@ -54,6 +56,15 @@ export default function Signup() {
     router.push('/verify?email=' + encodeURIComponent(form.email));
   }
 
+
+  if (checking) {
+    return (
+      <div className="wrap center">
+        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <p className="muted" role="status"><span className="spinner" /> Checking your session</p>
+      </div>
+    );
+  }
   return (
     <div className="wrap">
       <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>

@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { useRedirectIfSignedIn } from '../../lib/useRedirectIfSignedIn';
 
 export default function Login() {
   const router = useRouter();
@@ -9,6 +10,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const checking = useRedirectIfSignedIn(router);
 
   async function submit(e) {
     e.preventDefault();
@@ -28,6 +30,15 @@ export default function Login() {
     router.replace('/dashboard');
   }
 
+
+  if (checking) {
+    return (
+      <div className="wrap center">
+        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <p className="muted" role="status"><span className="spinner" /> Checking your session</p>
+      </div>
+    );
+  }
   return (
     <div className="wrap">
       <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>

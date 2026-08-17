@@ -22,6 +22,18 @@ export async function POST(request) {
   const user = await getUserFromRequest(request);
   if (!user) return NextResponse.json({ error: 'Not signed in.' }, { status: 401 });
 
+  // Fail loudly on missing config. Without this, an unset FACEBOOK_APP_ID
+  // produced client_id=undefined and Facebook answered with a bare
+  // "Invalid App ID" page that says nothing about the real cause.
+  const missing = ['FACEBOOK_APP_ID', 'FACEBOOK_APP_SECRET', 'PORTAL_URL']
+    .filter(k => !process.env[k]);
+  if (missing.length) {
+    console.error('Facebook connect is misconfigured. Missing env vars:', missing.join(', '));
+    return NextResponse.json({
+      error: 'Facebook connections are not configured yet. Please email info@omnignis.com.',
+    }, { status: 500 });
+  }
+
   const admin = supabaseAdmin();
   const state = crypto.randomBytes(24).toString('hex');
 

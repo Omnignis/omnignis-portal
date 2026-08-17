@@ -133,3 +133,12 @@ grant  select (profile_id, page_id, page_name, connected_at)
 revoke update on public.profiles from authenticated;
 grant  update (church_name, destination_emails, report_frequency, business_address, phone)
   on public.profiles to authenticated;
+
+-- ============================================================
+-- On-demand reports (added 2026-08-17)
+-- The portal's "Send report now" button triggers the GitHub Actions job for a
+-- single church. This column is the server-side rate limit and is deliberately
+-- NOT in the authenticated UPDATE grant above, so a client cannot reset its own
+-- cooldown. Only report.py and the API route (service_role) write it.
+-- ============================================================
+alter table public.profiles add column if not exists last_manual_report_at timestamptz;

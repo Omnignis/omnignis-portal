@@ -38,6 +38,12 @@ GRAPH_VERSION = os.environ.get("GRAPH_API_VERSION", "v21.0")
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 FROM_EMAIL = os.environ.get("REPORT_FROM_EMAIL", "reports@send.omnignis.com")
 
+# On-demand runs. The portal triggers this workflow with a single profile id via
+# workflow_dispatch; an empty value means the normal scheduled sweep.
+ONLY_PROFILE_ID = os.environ.get("ONLY_PROFILE_ID", "").strip()
+REPORT_MODE = (os.environ.get("REPORT_MODE") or "scheduled").strip().lower()
+IS_MANUAL = bool(ONLY_PROFILE_ID)
+
 GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 SB_HEADERS = {
     "apikey": SERVICE_KEY,
@@ -93,12 +99,28 @@ def lookback_days(frequency: str) -> int:
     return {"daily": 2, "weekly": 8, "monthly": 32}.get(frequency, 8)
 
 
+def latest_livestream_only(videos: list) -> list:
+    """Narrow a video list down to the single most recent livestream.
+
+    live_status is present on videos that were broadcast live (LIVE,
+    LIVE_STOPPED, VOD). If Graph does not return the field at all, we cannot
+    tell a livestream from an uploaded clip, so we fall back to the newest
+    video rather than sending an empty report.
+    """
+    if not videos:
+        return []
+    live = [v for v in videos if v.get("live_status")]
+    pool = live or videos
+    pool = sorted(pool, key=lambda v: v.get("created_time", ""), reverse=True)
+    return pool[:1]
+
+
 # ----------------------- facebook -----------------------
 def fetch_videos(page_id: str, token: str, since_dt: datetime) -> list:
     proof = appsecret_proof(token)
     params = {
         "access_token": token,
-        "fields": "id,title,description,created_time",
+        "fields": "id,title,description,created_time,live_status",
         "since": int(since_dt.timestamp()),
         "limit": 50,
     }
@@ -228,23 +250,43 @@ def main():
         if c.get("page_id") and c.get("token_ciphertext")   # skip half-finished connections
     }
 
+    if IS_MANUAL:
+        profiles = [p for p in profiles if p["id"] == ONLY_PROFILE_ID]
+        if not profiles:
+            print(f"No profile matched ONLY_PROFILE_ID={ONLY_PROFILE_ID}")
+            raise SystemExit(1)
+        print(f"Manual run for profile {ONLY_PROFILE_ID}, mode={REPORT_MODE}")
+
     processed = 0
     failed = 0
     for p in profiles:
         conn = connections.get(p["id"])
         if not conn:
+            if IS_MANUAL:
+                print("ERROR: that church has no completed Facebook connection")
+                raise SystemExit(1)
             continue
-        if not is_due(p.get("report_frequency", "weekly"), today):
+        # A manual run is an explicit request, so the schedule does not apply.
+        if not IS_MANUAL and not is_due(p.get("report_frequency", "weekly"), today):
             continue
 
         try:
             token = decrypt_token(conn["token_ciphertext"])
-            if p.get("last_report_at"):
+            if REPORT_MODE == "latest":
+                # Look back far enough to be sure of catching the last service,
+                # then keep only the most recent livestream.
+                since = today - timedelta(days=90)
+            elif p.get("last_report_at"):
                 since = datetime.fromisoformat(p["last_report_at"].replace("Z", "+00:00"))
             else:
                 since = today - timedelta(days=lookback_days(p["report_frequency"]))
 
             videos = fetch_videos(conn["page_id"], token, since)
+            if REPORT_MODE == "latest":
+                videos = latest_livestream_only(videos)
+                if not videos:
+                    print("ERROR: no livestreams found on that page in the last 90 days")
+                    raise SystemExit(1)
             rows = []
             for vid in videos:
                 m = fetch_metrics(vid["id"], token)
@@ -256,7 +298,10 @@ def main():
                     "unique_viewers": m["unique_viewers"],
                 })
 
-            period = f"{since.date()} to {today.date()}"
+            if REPORT_MODE == "latest" and rows:
+                period = rows[0]["date"]
+            else:
+                period = f"{since.date()} to {today.date()}"
             xlsx = build_workbook(p["church_name"], rows, period)
             recipients = [e.strip() for e in (p["destination_emails"] or "").split(",") if e.strip()]
             if not recipients:
@@ -271,7 +316,12 @@ def main():
             fname = f"{p['church_name'].replace(' ', '_')}_livestream_report_{today.date()}.xlsx"
             send_email(recipients, f"Livestream report: {p['church_name']}", html, fname, xlsx)
 
-            sb_patch("profiles", f"id=eq.{p['id']}", {"last_report_at": today.isoformat()})
+            # Only a scheduled run advances last_report_at. If a manual run moved
+            # it, the next scheduled report would skip everything in between.
+            if IS_MANUAL:
+                sb_patch("profiles", f"id=eq.{p['id']}", {"last_manual_report_at": today.isoformat()})
+            else:
+                sb_patch("profiles", f"id=eq.{p['id']}", {"last_report_at": today.isoformat()})
             processed += 1
             print(f"OK: sent report to {p['church_name']} ({len(rows)} videos)")
         except Exception as e:

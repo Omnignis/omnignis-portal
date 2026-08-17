@@ -57,8 +57,8 @@ schema.sql                 Supabase schema, re-runnable
    - Privacy Policy URL: `https://omnignis.com/privacy.html`
    - **Data Deletion Callback URL**: `https://portal.omnignis.com/api/facebook/data-deletion`
 3. Permissions used: `pages_show_list`, `pages_read_engagement`, `read_insights`.
-   Until App Review passes, only admins/testers of the app can connect,
-   the dashboard tells churches this and points them to info@omnignis.com.
+   The Meta app is Published, so any page admin can connect.
+   the dashboard no longer shows a review notice.
 
 ### 4. GitHub Action (reports)
 Repo Settings > Secrets and variables > Actions, add:

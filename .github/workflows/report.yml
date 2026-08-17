@@ -5,7 +5,20 @@ on:
     # 19:00 UTC daily = 1:00/2:00 PM Central. The script itself decides which
     # churches are due (daily / weekly=Sunday / monthly=1st).
     - cron: "0 19 * * *"
-  workflow_dispatch: {}   # manual "Run workflow" button for testing
+  workflow_dispatch:
+    inputs:
+      profile_id:
+        description: "Single profile id to report on. Leave blank for the normal sweep of all due churches."
+        required: false
+        default: ""
+      mode:
+        description: "latest = most recent livestream only. scheduled = normal window for that church."
+        required: false
+        default: "scheduled"
+        type: choice
+        options:
+          - scheduled
+          - latest
 
 jobs:
   report:
@@ -26,3 +39,6 @@ jobs:
           GRAPH_API_VERSION: v21.0
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REPORT_FROM_EMAIL: reports@send.omnignis.com
+          # Empty on scheduled runs. Set by the portal for an on-demand report.
+          ONLY_PROFILE_ID: ${{ github.event.inputs.profile_id }}
+          REPORT_MODE: ${{ github.event.inputs.mode }}
