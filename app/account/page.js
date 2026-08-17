@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getSessionOrRedirect } from '../../lib/session';
 import AppFooter from '../../components/AppFooter';
+import Brand from '../../components/Brand';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -15,6 +16,18 @@ const FORMATS = [
   { key: 'docx', label: 'Word',  hint: '.docx' },
   { key: 'txt',  label: 'Plain text', hint: '.txt' },
   { key: 'png',  label: 'Image', hint: '.png' },
+];
+
+// Only thresholds Facebook actually publishes. video_insights stops at 60
+// seconds, so there is no 5 or 10 minute metric to offer.
+const VIEWER_COLUMNS = [
+  { key: 'views',  label: 'Total views',      hint: '3s or more' },
+  { key: 'unique', label: 'Unique viewers',   hint: 'people, not plays' },
+  { key: 'sec10',  label: '10s+ viewers',     hint: 'stayed 10 seconds' },
+  { key: 'min1',   label: '1 min+ viewers',   hint: 'stayed a minute' },
+  { key: 'day_of', label: 'On service day',   hint: 'that day only' },
+  { key: 'week',   label: 'During the week',  hint: 'after the service' },
+  { key: 'window', label: 'Through Saturday', hint: 'full week total' },
 ];
 
 const COMMON_ZONES = [
@@ -60,7 +73,7 @@ export default function Account() {
     if (!session) return;
     try {
       const { data, error } = await supabase.from('profiles')
-        .select('church_name,destination_emails,report_frequency,business_address,phone,timezone,send_hour,send_weekday,report_formats').single();
+        .select('church_name,destination_emails,report_frequency,business_address,phone,timezone,send_hour,send_weekday,report_formats,custom_reporting,viewer_metrics').single();
       // Previously the error was discarded, so a missing row rendered a blank
       // form that looked like the customer's settings had been wiped.
       if (error) throw error;
@@ -75,6 +88,17 @@ export default function Account() {
 
   const chosenFormats = (form && form.report_formats ? form.report_formats : 'xlsx')
     .split(',').map(f => f.trim()).filter(Boolean);
+
+  const chosenMetrics = (form && form.viewer_metrics ? form.viewer_metrics : 'views,unique,min1')
+    .split(',').map(m => m.trim()).filter(Boolean);
+
+  function toggleMetric(key) {
+    const next = chosenMetrics.includes(key)
+      ? chosenMetrics.filter(m => m !== key)
+      : [...chosenMetrics, key];
+    const ordered = VIEWER_COLUMNS.map(m => m.key).filter(k => next.includes(k));
+    set('viewer_metrics', (ordered.length ? ordered : ['views', 'unique', 'min1']).join(','));
+  }
 
   function toggleFormat(key) {
     const next = chosenFormats.includes(key)
@@ -110,6 +134,8 @@ export default function Account() {
         send_hour: Number(form.send_hour ?? 13),
         send_weekday: Number(form.send_weekday ?? 6),
         report_formats: form.report_formats || 'xlsx',
+        custom_reporting: !!form.custom_reporting,
+        viewer_metrics: form.viewer_metrics || 'views,unique,min1',
       }).eq('id', session.user.id).select('id');
       if (error) throw error;
       // A zero-row update is reported as success by PostgREST. Without this the
@@ -186,7 +212,7 @@ export default function Account() {
 
   const topbar = (
     <div className="topbar reveal">
-      <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand small href="/dashboard" />
       <nav>
         <a href="/dashboard">Dashboard</a>
         <a href="/account" className="active">My account</a>
@@ -212,7 +238,7 @@ export default function Account() {
   if (!form) {
     return (
       <div className="wrap center">
-        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <Brand />
         <p className="muted" role="status"><span className="spinner" /> Loading your settings</p>
       </div>
     );
@@ -315,6 +341,84 @@ export default function Account() {
             <p className="hint">
               Pick as many as you like. Each one is attached to the same email.
             </p>
+          </div>
+
+          <div className="divider" />
+
+          <div className="field">
+            <label>Reporting detail</label>
+            <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
+              A reporting week runs from the day of a service through the following
+              Saturday, so a Sunday service and the week that follows it stay together
+              on one line.
+            </p>
+
+            <label className="choice">
+              <input
+                type="radio"
+                name="reportmode"
+                checked={!form.custom_reporting}
+                onChange={() => set('custom_reporting', false)}
+              />
+              <span className="box">
+                <span className="mark" aria-hidden="true" />
+                <span className="t">
+                  Standard
+                  <span className="d">
+                    Date, title, total views, unique viewers, and 1 minute or more viewers.
+                  </span>
+                </span>
+              </span>
+            </label>
+
+            <label className="choice">
+              <input
+                type="radio"
+                name="reportmode"
+                checked={!!form.custom_reporting}
+                onChange={() => set('custom_reporting', true)}
+              />
+              <span className="box">
+                <span className="mark" aria-hidden="true" />
+                <span className="t">
+                  Custom
+                  <span className="d">
+                    Choose your own columns, including how many viewers watched on the
+                    day of the service versus during the week after.
+                  </span>
+                </span>
+              </span>
+            </label>
+
+            {!!form.custom_reporting && (
+              <div className="choice-body">
+                <label style={{ display: 'block', fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                  Columns to include
+                </label>
+                <div className="fmt-grid">
+                  {VIEWER_COLUMNS.map(m => {
+                    const on = chosenMetrics.includes(m.key);
+                    return (
+                      <label key={m.key} className={'fmt' + (on ? ' on' : '')}>
+                        <input type="checkbox" checked={on} onChange={() => toggleMetric(m.key)} />
+                        <span className="fmt-box">
+                          <span className="fmt-label">{m.label}</span>
+                          <span className="fmt-hint">{m.hint}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="info" style={{ marginTop: 12 }}>
+                  <b style={{ color: 'var(--cream)' }}>On the day-of columns:</b> Facebook only
+                  reports a running total per video, never a daily breakdown, so we record your
+                  numbers once a day and compare them. These columns read{' '}
+                  <span style={{ fontFamily: 'var(--mono)' }}>collecting</span> until a service has
+                  been through a full week. Services from before you switched this on cannot be
+                  filled in.
+                </div>
+              </div>
+            )}
           </div>
           <div className="field">
             <label htmlFor="addr">Business address <span style={{ opacity: .6 }}>(optional)</span></label>

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { useRedirectIfSignedIn } from '../../lib/useRedirectIfSignedIn';
+import Brand from '../../components/Brand';
 
 export default function Login() {
   const router = useRouter();
@@ -34,14 +35,14 @@ export default function Login() {
   if (checking) {
     return (
       <div className="wrap center">
-        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <Brand />
         <p className="muted" role="status"><span className="spinner" /> Checking your session</p>
       </div>
     );
   }
   return (
     <div className="wrap">
-      <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card reveal d2">
         <h1>Welcome <span className="em">back</span></h1>
         <p className="sub">Sign in to your church&rsquo;s reporting dashboard.</p>

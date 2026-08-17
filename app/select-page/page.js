@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getSessionOrRedirect } from '../../lib/session';
+import Brand from '../../components/Brand';
 
 export default function SelectPage() {
   const router = useRouter();
@@ -57,7 +58,7 @@ export default function SelectPage() {
 
   return (
     <div className="wrap">
-      <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card reveal d2">
         <h1>Choose your <span className="em">page</span></h1>
         <p className="sub">Which Facebook page should we pull livestream numbers from?</p>

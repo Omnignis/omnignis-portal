@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import Brand from '../../components/Brand';
 
 export default function Forgot() {
   const [email, setEmail] = useState('');
@@ -21,7 +22,7 @@ export default function Forgot() {
 
   return (
     <div className="wrap">
-      <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card reveal d2">
         <h1>Reset your <span className="em">password</span></h1>
         {sent ? (

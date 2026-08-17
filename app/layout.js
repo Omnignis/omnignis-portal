@@ -1,10 +1,11 @@
 import './globals.css';
 import CardGlow from '../components/CardGlow';
+import MemberFlag from '../components/MemberFlag';
 
 export const metadata = {
   title: 'Omnignis Church Portal',
   description: 'Automated livestream attendance reports for churches.',
-  icons: { icon: 'https://omnignis.com/assets/favicon.png' },
+  icons: { icon: '/flame.svg' },
 };
 
 export default function RootLayout({ children }) {
@@ -13,6 +14,7 @@ export default function RootLayout({ children }) {
       <body>
         {children}
         <CardGlow />
+        <MemberFlag />
       </body>
     </html>
   );

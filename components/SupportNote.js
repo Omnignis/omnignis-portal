@@ -14,7 +14,7 @@ export default function SupportNote() {
         </p>
       </div>
       <a
-        className="btn btn-ghost support-btn"
+        className="btn btn-ember support-btn"
         href={PAYPAL_URL}
         target="_blank"
         rel="noopener noreferrer"

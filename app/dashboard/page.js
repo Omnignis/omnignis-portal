@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabaseClient';
 import { getSessionOrRedirect } from '../../lib/session';
 import AppFooter from '../../components/AppFooter';
 import SupportNote from '../../components/SupportNote';
+import Brand from '../../components/Brand';
 
 const DAY_NAME = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const FORMAT_LABEL = { xlsx: 'Excel', pdf: 'PDF', csv: 'CSV', docx: 'Word', txt: 'Plain text', png: 'Image' };
@@ -78,7 +79,7 @@ export default function Dashboard() {
     try {
       const [profRes, connRes] = await Promise.all([
         supabase.from('profiles')
-          .select('church_name,destination_emails,report_frequency,last_report_at,last_manual_report_at,timezone,send_hour,send_weekday,report_formats').single(),
+          .select('church_name,destination_emails,report_frequency,last_report_at,last_manual_report_at,timezone,send_hour,send_weekday,report_formats,custom_reporting').single(),
         // token_ciphertext is deliberately NOT selected. Connection state is
         // derived from page_id, so the encrypted token never reaches the browser.
         supabase.from('facebook_connections')
@@ -183,7 +184,7 @@ export default function Dashboard() {
   return (
     <div className="wrap-wide">
       <div className="topbar reveal">
-        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <Brand small href="/dashboard" />
         <nav>
           <a href="/dashboard" className="active">Dashboard</a>
           <a href="/account">My account</a>
@@ -281,6 +282,17 @@ export default function Dashboard() {
             <span className={'v' + (profile && profile.timezone ? '' : ' none')}>
               {loading ? <span className="skel" aria-hidden="true">America/Chicago</span>
                 : (profile && profile.timezone) || 'Not set'}
+            </span>
+          </div>
+          <div className="row">
+            <span className="k">Reporting week</span>
+            <span className="v">Service day through the following Saturday</span>
+          </div>
+          <div className="row">
+            <span className="k">Detail</span>
+            <span className={'v' + (profile ? '' : ' none')}>
+              {loading ? <span className="skel" aria-hidden="true">Standard</span>
+                : profile ? (profile.custom_reporting ? 'Custom columns' : 'Standard') : 'Not set'}
             </span>
           </div>
           <div className="row">

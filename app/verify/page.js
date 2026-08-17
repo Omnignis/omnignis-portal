@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import Brand from '../../components/Brand';
 
 export default function Verify() {
   const router = useRouter();
@@ -42,7 +43,7 @@ export default function Verify() {
 
   return (
     <div className="wrap">
-      <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card reveal d2">
         <h1>Check your <span className="em">email</span></h1>
         <p className="sub">We sent a 6-digit code to <b style={{ color: 'var(--cream)' }}>{email || 'your email'}</b>. Enter it below to activate your account.</p>

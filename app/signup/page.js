@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { useRedirectIfSignedIn } from '../../lib/useRedirectIfSignedIn';
+import Brand from '../../components/Brand';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -66,14 +67,14 @@ export default function Signup() {
   if (checking) {
     return (
       <div className="wrap center">
-        <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+        <Brand />
         <p className="muted" role="status"><span className="spinner" /> Checking your session</p>
       </div>
     );
   }
   return (
     <div className="wrap">
-      <div className="brand reveal"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card reveal d2">
         <h1>Create your <span className="em">account</span></h1>
         <p className="sub">Set up automated livestream reports for your church. Takes about two minutes.</p>

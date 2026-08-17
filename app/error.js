@@ -2,13 +2,14 @@
 // Route-level error boundary. Without this, any uncaught render or effect error
 // showed the church a blank page with Next's default "Application error" text.
 import { useEffect } from 'react';
+import Brand from '../components/Brand';
 
 export default function Error({ error, reset }) {
   useEffect(() => { console.error('Portal error boundary:', error); }, [error]);
 
   return (
     <div className="wrap center">
-      <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <div className="card" style={{ textAlign: 'left' }}>
         <h1>Something went <span className="em">wrong</span></h1>
         <p className="sub">

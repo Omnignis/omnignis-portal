@@ -30,6 +30,7 @@ import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import formats
+import snapshots
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SERVICE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -229,34 +230,122 @@ def fetch_videos(page_id: str, token: str, since_dt: datetime) -> list:
     return videos
 
 
-def fetch_metrics(video_id: str, token: str) -> dict:
+# Only thresholds Facebook actually publishes. There is no 5 or 10 minute
+# metric on video_insights: the ladder stops at 60 seconds.
+CORE_METRICS = ["total_video_views", "total_video_views_unique"]
+EXTRA_METRICS = ["total_video_10s_views", "total_video_60s_excludes_shorter_views"]
+
+METRIC_KEY = {
+    "total_video_views": "total_views",
+    "total_video_views_unique": "unique_viewers",
+    "total_video_10s_views": "sec10_viewers",
+    "total_video_60s_excludes_shorter_views": "min1_viewers",
+}
+
+_metrics_degraded = False        # set once if Graph rejects the extended set
+
+
+def _read_insights(video_id: str, token: str, metrics: list) -> dict:
     proof = appsecret_proof(token)
-    params = {
-        "access_token": token,
-        "metric": "total_video_views,total_video_views_unique",
-    }
+    params = {"access_token": token, "metric": ",".join(metrics)}
     if proof:
         params["appsecret_proof"] = proof
     r = requests.get(f"{GRAPH}/{video_id}/video_insights", params=params, timeout=30)
-    data = r.json()
-    # Without this check a Graph error (expired token, rate limit, renamed
-    # metric) silently produced a report of all zeros AND advanced
-    # last_report_at, permanently consuming the reporting window. Raising
-    # instead skips this church for this run and leaves the window open.
+    return r.json()
+
+
+def fetch_metrics(video_id: str, token: str) -> dict:
+    """
+    Read the viewer counts for one video.
+
+    Every video_insights metric is a LIFETIME total. There is no period or
+    since/until, so this is "as of right now", not "during the report window".
+    Day-of and week-after figures come from differencing daily snapshots.
+    """
+    global _metrics_degraded
+
+    wanted = CORE_METRICS if _metrics_degraded else CORE_METRICS + EXTRA_METRICS
+    data = _read_insights(video_id, token, wanted)
+
+    # If Graph rejects one of the extended names (they do get retired), fall back
+    # to the two we cannot do without rather than failing the whole church.
+    if "error" in data and not _metrics_degraded:
+        msg = data["error"].get("message", "")
+        print(f"   note: extended metrics rejected ({msg}). "
+              f"Falling back to {', '.join(CORE_METRICS)} for the rest of this run.")
+        _metrics_degraded = True
+        data = _read_insights(video_id, token, CORE_METRICS)
+
     if "error" in data:
         raise RuntimeError(f"Graph insights error: {data['error'].get('message')}")
-    out = {"total_views": 0, "unique_viewers": 0}
+
+    out = {"total_views": 0, "unique_viewers": 0, "sec10_viewers": None, "min1_viewers": None}
     for item in data.get("data", []):
-        name = item.get("name")
+        key = METRIC_KEY.get(item.get("name"))
+        if not key:
+            continue
         try:
-            value = item["values"][0]["value"]
-        except (KeyError, IndexError):
-            value = 0
-        if name == "total_video_views":
-            out["total_views"] = value
-        elif name == "total_video_views_unique":
-            out["unique_viewers"] = value
+            out[key] = item["values"][0]["value"]
+        except (KeyError, IndexError, TypeError):
+            pass
     return out
+
+
+def sb_post(table, rows, on_conflict=None):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    if on_conflict:
+        url += f"?on_conflict={on_conflict}"
+    headers = dict(SB_HEADERS)
+    # merge-duplicates makes the unique index idempotent, so a second run in the
+    # same local day updates instead of erroring.
+    headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+    r = requests.post(url, headers=headers, json=rows, timeout=30)
+    r.raise_for_status()
+
+
+def capture_snapshots(p, conn, token, tz):
+    """Record today's running totals for recent livestreams. Once per local day."""
+    local_now = datetime.now(tz)
+    if local_now.hour < snapshots.SNAPSHOT_HOUR:
+        return 0
+    today_local = local_now.date()
+    already = sb_get(
+        "livestream_snapshots",
+        f"select=local_date&profile_id=eq.{p['id']}&local_date=eq.{today_local}&limit=1")
+    if already:
+        return 0
+
+    since = local_now - timedelta(days=snapshots.SNAPSHOT_WINDOW_DAYS)
+    videos = filter_livestreams(fetch_videos(conn["page_id"], token, since))
+    rows = []
+    for vid in videos:
+        m = fetch_metrics(vid["id"], token)
+        rows.append({
+            "profile_id": p["id"],
+            "video_id": vid["id"],
+            "service_date": local_date_str(vid.get("created_time", ""), tz) or None,
+            "local_date": str(today_local),
+            "total_views": m["total_views"],
+            "unique_viewers": m["unique_viewers"],
+            "sec10_viewers": m["sec10_viewers"],
+            "min1_viewers": m["min1_viewers"],
+        })
+    if rows:
+        sb_post("livestream_snapshots", rows,
+                on_conflict="profile_id,video_id,local_date")
+    return len(rows)
+
+
+def load_snapshots(profile_id, since_date):
+    """All snapshots for a church since a date, grouped by video id."""
+    rows = sb_get(
+        "livestream_snapshots",
+        f"select=video_id,local_date,total_views,unique_viewers,sec10_viewers,min1_viewers"
+        f"&profile_id=eq.{profile_id}&local_date=gte.{since_date}&order=local_date.asc")
+    grouped = {}
+    for r in rows:
+        grouped.setdefault(r["video_id"], []).append(r)
+    return grouped
 
 
 # ----------------------- email -----------------------
@@ -284,7 +373,7 @@ def send_email(to_list: list, subject: str, html: str, attachments: list) -> Non
 # ----------------------- main -----------------------
 def main():
     today = datetime.now(timezone.utc)
-    profiles = sb_get("profiles", "select=id,church_name,destination_emails,report_frequency,last_report_at,timezone,send_hour,send_weekday,report_formats")
+    profiles = sb_get("profiles", "select=id,church_name,destination_emails,report_frequency,last_report_at,timezone,send_hour,send_weekday,report_formats,custom_reporting,viewer_metrics")
     connections = {
         c["profile_id"]: c
         for c in sb_get("facebook_connections", "select=profile_id,page_id,page_name,token_ciphertext")
@@ -308,6 +397,18 @@ def main():
                 raise SystemExit(1)
             continue
         tz = tz_for(p)
+
+        # Snapshots run on every hourly pass, independent of whether a report is
+        # due. Miss a day and that day's split is gone for good.
+        if not IS_MANUAL:
+            try:
+                token_for_snap = decrypt_token(conn["token_ciphertext"])
+                n = capture_snapshots(p, conn, token_for_snap, tz)
+                if n:
+                    print(f"snapshot: {p.get('church_name')} captured {n} livestream(s)")
+            except Exception as e:
+                print(f"snapshot ERROR for {p.get('church_name')}: {redact(e)}")
+
         # A manual run is an explicit request, so the schedule does not apply.
         if not IS_MANUAL and not is_due(p, tz):
             continue
@@ -332,16 +433,30 @@ def main():
                 if not videos:
                     print("ERROR: no livestreams found on that page in the last 90 days")
                     raise SystemExit(1)
+            custom = bool(p.get("custom_reporting"))
+            snaps = load_snapshots(p["id"], (today - timedelta(days=45)).date())
+
             rows = []
             for vid in videos:
                 m = fetch_metrics(vid["id"], token)
+                service_date = local_date_str(vid.get("created_time", ""), tz)
+                b = snapshots.breakdown_for(vid["id"], service_date, snaps, m)
                 rows.append({
-                    "date": local_date_str(vid.get("created_time", ""), tz),
+                    "date": service_date,
                     "title": vid.get("title") or vid.get("description", "")[:60] or "Livestream",
                     "total_views": m["total_views"],
                     "unique_viewers": m["unique_viewers"],
+                    "sec10_viewers": m["sec10_viewers"],
+                    "min1_viewers": m["min1_viewers"],
+                    # The requested split: the day itself, the whole week to the
+                    # following Saturday, and what accrued in between.
+                    "day_of": b["day_of"],
+                    "through_saturday": b["through_saturday"],
+                    "during_week": b["during_week"],
+                    "window_end": b["window_end"],
+                    "window_complete": b["complete"],
                 })
-            rows.sort(key=lambda r: r["date"], reverse=True)
+            rows.sort(key=lambda r: r["date"] or "", reverse=True)
 
             if REPORT_MODE == "latest" and rows:
                 period = rows[0]["date"]
@@ -350,7 +465,8 @@ def main():
                           f"{datetime.now(tz).date()}")
 
             chosen = formats.parse_formats(p.get("report_formats"))
-            attachments = formats.build_all(p["church_name"], rows, period, chosen)
+            columns = formats.parse_columns(p.get("viewer_metrics"), custom)
+            attachments = formats.build_all(p["church_name"], rows, period, chosen, columns)
             recipients = [e.strip() for e in (p["destination_emails"] or "").split(",") if e.strip()]
             if not recipients:
                 continue

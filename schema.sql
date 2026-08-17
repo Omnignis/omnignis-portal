@@ -175,3 +175,55 @@ revoke update on public.profiles from authenticated;
 grant  update (church_name, destination_emails, report_frequency, business_address,
                phone, timezone, send_hour, send_weekday, report_formats)
   on public.profiles to authenticated;
+
+-- ============================================================
+-- Custom reporting, duration thresholds, and daily snapshots
+-- (added 2026-08-17)
+--
+-- WHY SNAPSHOTS EXIST: Facebook's video_insights metrics are lifetime totals
+-- only. There is no period or since/until on them, so the API can never tell us
+-- "how many views happened on Sunday" versus "during the following week". It
+-- only ever reports the running total as of the moment we ask.
+--
+-- So we ask once per local day and store the answer. Differencing two snapshots
+-- gives the day-of and week-after numbers churches actually want:
+--   day of service      = snapshot at the end of the service day
+--   through Saturday    = snapshot at the end of the following Saturday
+--   during the week     = the difference
+--
+-- This only works forward from the day capture starts. Past services cannot be
+-- reconstructed, which is why it is switched on for everyone by default.
+-- ============================================================
+
+alter table public.profiles add column if not exists custom_reporting boolean not null default false;
+-- Which viewer columns appear. Only thresholds Facebook actually publishes:
+-- views (3s), unique, sec10, min1 (60s). There is no 5 or 10 minute metric.
+alter table public.profiles add column if not exists viewer_metrics text not null default 'views,unique,min1';
+
+create table if not exists public.livestream_snapshots (
+  id            bigserial primary key,
+  profile_id    uuid not null references auth.users(id) on delete cascade,
+  video_id      text not null,
+  service_date  date,                    -- local date of the livestream
+  local_date    date not null,            -- local date this snapshot was taken
+  captured_at   timestamptz not null default now(),
+  total_views   integer,
+  unique_viewers integer,
+  sec10_viewers integer,
+  min1_viewers  integer
+);
+
+create unique index if not exists livestream_snapshots_one_per_day
+  on public.livestream_snapshots (profile_id, video_id, local_date);
+create index if not exists livestream_snapshots_lookup
+  on public.livestream_snapshots (profile_id, video_id, local_date desc);
+
+-- Snapshots are written and read only by the report job using the service role,
+-- which bypasses RLS. No policies for authenticated means no client access.
+alter table public.livestream_snapshots enable row level security;
+
+revoke update on public.profiles from authenticated;
+grant  update (church_name, destination_emails, report_frequency, business_address,
+               phone, timezone, send_hour, send_weekday, report_formats,
+               custom_reporting, viewer_metrics)
+  on public.profiles to authenticated;

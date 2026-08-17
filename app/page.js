@@ -2,6 +2,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabaseClient';
+import Brand from '../components/Brand';
 
 export default function Home() {
   const router = useRouter();
@@ -12,7 +13,7 @@ export default function Home() {
   }, [router]);
   return (
     <div className="wrap center">
-      <div className="brand"><span className="dot" /><span className="name">OMNIGNIS</span></div>
+      <Brand />
       <p className="muted"><span className="spinner" /> Loading…</p>
     </div>
   );
