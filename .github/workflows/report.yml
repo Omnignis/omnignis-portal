@@ -2,9 +2,11 @@ name: Send livestream reports
 
 on:
   schedule:
-    # 19:00 UTC daily = 1:00/2:00 PM Central. The script itself decides which
-    # churches are due (daily / weekly=Sunday / monthly=1st).
-    - cron: "0 19 * * *"
+    # Hourly. Each church now has its own timezone and send hour, so the job has
+    # to wake up every hour and let report.py decide who is due. is_due() asks
+    # "has the scheduled moment passed and have we not sent for it yet", so a
+    # delayed or skipped run catches up on the next pass and cannot double-send.
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       profile_id:
@@ -25,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r report/requirements.txt

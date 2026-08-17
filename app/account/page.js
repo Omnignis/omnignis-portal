@@ -7,6 +7,42 @@ import AppFooter from '../../components/AppFooter';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+// Mirrors report/formats.py SUPPORTED, same order.
+const FORMATS = [
+  { key: 'xlsx', label: 'Excel', hint: '.xlsx' },
+  { key: 'pdf',  label: 'PDF',   hint: '.pdf' },
+  { key: 'csv',  label: 'CSV',   hint: '.csv' },
+  { key: 'docx', label: 'Word',  hint: '.docx' },
+  { key: 'txt',  label: 'Plain text', hint: '.txt' },
+  { key: 'png',  label: 'Image', hint: '.png' },
+];
+
+const COMMON_ZONES = [
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix',
+  'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu',
+];
+
+const WEEKDAYS = [
+  { v: 6, label: 'Sunday' }, { v: 0, label: 'Monday' }, { v: 1, label: 'Tuesday' },
+  { v: 2, label: 'Wednesday' }, { v: 3, label: 'Thursday' }, { v: 4, label: 'Friday' },
+  { v: 5, label: 'Saturday' },
+];
+
+function hourLabel(h) {
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}:00 ${suffix}`;
+}
+
+function allZones() {
+  try {
+    if (typeof Intl.supportedValuesOf === 'function') {
+      return Intl.supportedValuesOf('timeZone');
+    }
+  } catch (e) { /* older browser */ }
+  return [];
+}
+
 export default function Account() {
   const router = useRouter();
   const [form, setForm] = useState(null);
@@ -24,7 +60,7 @@ export default function Account() {
     if (!session) return;
     try {
       const { data, error } = await supabase.from('profiles')
-        .select('church_name,destination_emails,report_frequency,business_address,phone').single();
+        .select('church_name,destination_emails,report_frequency,business_address,phone,timezone,send_hour,send_weekday,report_formats').single();
       // Previously the error was discarded, so a missing row rendered a blank
       // form that looked like the customer's settings had been wiped.
       if (error) throw error;
@@ -36,6 +72,19 @@ export default function Account() {
   }
 
   function set(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
+
+  const chosenFormats = (form && form.report_formats ? form.report_formats : 'xlsx')
+    .split(',').map(f => f.trim()).filter(Boolean);
+
+  function toggleFormat(key) {
+    const next = chosenFormats.includes(key)
+      ? chosenFormats.filter(f => f !== key)
+      : [...chosenFormats, key];
+    // Keep the canonical order and never allow an empty selection: an email
+    // with no attachment is worse than one in a format they did not pick.
+    const ordered = FORMATS.map(f => f.key).filter(k => next.includes(k));
+    set('report_formats', (ordered.length ? ordered : ['xlsx']).join(','));
+  }
   function clearBanners() { setError(''); setNotice(''); }
 
   async function saveProfile(e) {
@@ -57,6 +106,10 @@ export default function Account() {
         report_frequency: form.report_frequency,
         business_address: form.business_address || null,
         phone: form.phone || null,
+        timezone: form.timezone || 'America/Chicago',
+        send_hour: Number(form.send_hour ?? 13),
+        send_weekday: Number(form.send_weekday ?? 6),
+        report_formats: form.report_formats || 'xlsx',
       }).eq('id', session.user.id).select('id');
       if (error) throw error;
       // A zero-row update is reported as success by PostgREST. Without this the
@@ -190,12 +243,78 @@ export default function Account() {
             <p className="hint">Separate multiple addresses with commas.</p>
           </div>
           <div className="field">
-            <label htmlFor="freq">Report frequency</label>
+            <label htmlFor="freq">How often</label>
             <select id="freq" value={form.report_frequency || 'weekly'} onChange={e => set('report_frequency', e.target.value)}>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly (Sundays)</option>
-              <option value="monthly">Monthly (1st)</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+              <option value="monthly">Every month</option>
             </select>
+          </div>
+
+          {(form.report_frequency || 'weekly') === 'weekly' && (
+            <div className="field">
+              <label htmlFor="wd">Which day</label>
+              <select id="wd" value={String(form.send_weekday ?? 6)} onChange={e => set('send_weekday', e.target.value)}>
+                {WEEKDAYS.map(d => <option key={d.v} value={d.v}>{d.label}</option>)}
+              </select>
+              <p className="hint">Many churches pick Monday so the report covers the whole weekend.</p>
+            </div>
+          )}
+
+          <div className="field">
+            <label htmlFor="hour">What time</label>
+            <select id="hour" value={String(form.send_hour ?? 13)} onChange={e => set('send_hour', e.target.value)}>
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>{hourLabel(h)}</option>
+              ))}
+            </select>
+            <p className="hint">
+              Your local time. Reports go out within the hour you choose.
+              {(form.report_frequency || 'weekly') === 'monthly' && ' Monthly reports send on the 1st.'}
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="tz">Time zone</label>
+            <select id="tz" value={form.timezone || 'America/Chicago'} onChange={e => set('timezone', e.target.value)}>
+              <optgroup label="Common">
+                {COMMON_ZONES.map(z => <option key={z} value={z}>{z.replace('_', ' ')}</option>)}
+              </optgroup>
+              {allZones().length > 0 && (
+                <optgroup label="All time zones">
+                  {allZones().map(z => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
+                </optgroup>
+              )}
+            </select>
+            <p className="hint">
+              This also sets the dates on your report. Without it, an evening service
+              would be dated the following day.
+            </p>
+          </div>
+
+          <div className="field">
+            <label>File formats</label>
+            <div className="fmt-grid">
+              {FORMATS.map(f => {
+                const on = chosenFormats.includes(f.key);
+                return (
+                  <label key={f.key} className={'fmt' + (on ? ' on' : '')}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggleFormat(f.key)}
+                    />
+                    <span className="fmt-box">
+                      <span className="fmt-label">{f.label}</span>
+                      <span className="fmt-hint">{f.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="hint">
+              Pick as many as you like. Each one is attached to the same email.
+            </p>
           </div>
           <div className="field">
             <label htmlFor="addr">Business address <span style={{ opacity: .6 }}>(optional)</span></label>

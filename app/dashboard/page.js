@@ -4,8 +4,33 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getSessionOrRedirect } from '../../lib/session';
 import AppFooter from '../../components/AppFooter';
+import SupportNote from '../../components/SupportNote';
 
-const FREQ_LABEL = { daily: 'Daily', weekly: 'Weekly (Sundays)', monthly: 'Monthly (1st)' };
+const DAY_NAME = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const FORMAT_LABEL = { xlsx: 'Excel', pdf: 'PDF', csv: 'CSV', docx: 'Word', txt: 'Plain text', png: 'Image' };
+
+function hourLabel(h) {
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}:00 ${suffix}`;
+}
+
+// "Every Sunday at 1:00 PM" reads better on a dashboard than "weekly".
+function scheduleText(p) {
+  if (!p) return null;
+  const hour = hourLabel(Number(p.send_hour ?? 13));
+  const freq = p.report_frequency || 'weekly';
+  if (freq === 'daily') return `Every day at ${hour}`;
+  if (freq === 'monthly') return `The 1st of each month at ${hour}`;
+  return `Every ${DAY_NAME[Number(p.send_weekday ?? 6)]} at ${hour}`;
+}
+
+function formatsText(p) {
+  const list = (p && p.report_formats ? p.report_formats : 'xlsx')
+    .split(',').map(f => f.trim()).filter(Boolean)
+    .map(f => FORMAT_LABEL[f] || f);
+  return list.join(', ');
+}
 
 const MANUAL_COOLDOWN_MS = 60 * 60 * 1000;
 
@@ -53,7 +78,7 @@ export default function Dashboard() {
     try {
       const [profRes, connRes] = await Promise.all([
         supabase.from('profiles')
-          .select('church_name,destination_emails,report_frequency,last_report_at,last_manual_report_at').single(),
+          .select('church_name,destination_emails,report_frequency,last_report_at,last_manual_report_at,timezone,send_hour,send_weekday,report_formats').single(),
         // token_ciphertext is deliberately NOT selected. Connection state is
         // derived from page_id, so the encrypted token never reaches the browser.
         supabase.from('facebook_connections')
@@ -245,10 +270,24 @@ export default function Dashboard() {
         </div>
         <div style={{ marginTop: 10 }} aria-busy={loading ? 'true' : 'false'}>
           <div className="row">
-            <span className="k">Frequency</span>
+            <span className="k">Schedule</span>
             <span className={'v' + (profile ? '' : ' none')}>
-              {loading ? <span className="skel" aria-hidden="true">Weekly</span>
-                : profile ? (FREQ_LABEL[profile.report_frequency] || profile.report_frequency) : 'Not set'}
+              {loading ? <span className="skel" aria-hidden="true">Every Sunday at 1:00 PM</span>
+                : profile ? scheduleText(profile) : 'Not set'}
+            </span>
+          </div>
+          <div className="row">
+            <span className="k">Time zone</span>
+            <span className={'v' + (profile && profile.timezone ? '' : ' none')}>
+              {loading ? <span className="skel" aria-hidden="true">America/Chicago</span>
+                : (profile && profile.timezone) || 'Not set'}
+            </span>
+          </div>
+          <div className="row">
+            <span className="k">Formats</span>
+            <span className={'v' + (profile ? '' : ' none')}>
+              {loading ? <span className="skel" aria-hidden="true">Excel, PDF</span>
+                : profile ? formatsText(profile) : 'Not set'}
             </span>
           </div>
           <div className="row">
@@ -286,6 +325,8 @@ export default function Dashboard() {
           </>
         )}
       </section>
+
+      <SupportNote />
 
       <AppFooter />
     </div>

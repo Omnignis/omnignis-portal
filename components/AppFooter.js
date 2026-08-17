@@ -12,6 +12,8 @@ export default function AppFooter() {
         <a href="https://omnignis.com/privacy.html">Privacy</a>
         <a href="https://omnignis.com/terms.html">Terms</a>
         <a href="mailto:info@omnignis.com">Support</a>
+        <a href="https://www.paypal.com/donate/?hosted_button_id=EF2GTD68X4JBE"
+           target="_blank" rel="noopener noreferrer">Donate</a>
       </div>
     </footer>
   );

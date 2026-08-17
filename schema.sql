@@ -81,12 +81,13 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, church_name, destination_emails, report_frequency)
+  insert into public.profiles (id, church_name, destination_emails, report_frequency, timezone)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'church_name', 'My Church'),
     coalesce(new.raw_user_meta_data->>'destination_emails', new.email),
-    coalesce(new.raw_user_meta_data->>'report_frequency', 'weekly')
+    coalesce(new.raw_user_meta_data->>'report_frequency', 'weekly'),
+    coalesce(nullif(new.raw_user_meta_data->>'timezone', ''), 'America/Chicago')
   );
   return new;
 end;
@@ -142,3 +143,35 @@ grant  update (church_name, destination_emails, report_frequency, business_addre
 -- cooldown. Only report.py and the API route (service_role) write it.
 -- ============================================================
 alter table public.profiles add column if not exists last_manual_report_at timestamptz;
+
+-- ============================================================
+-- Per-church delivery schedule and export formats (added 2026-08-17)
+--
+-- Previously every report went out on one fixed UTC cron, and dates came from
+-- the raw UTC timestamp, so a Sunday evening service was dated Monday for every
+-- church west of Greenwich. The workflow now runs hourly and report.py decides
+-- who is due in their own local time.
+-- ============================================================
+alter table public.profiles add column if not exists timezone text not null default 'America/Chicago';
+alter table public.profiles add column if not exists send_hour int not null default 13;
+alter table public.profiles add column if not exists send_weekday int not null default 6;   -- Mon=0 .. Sun=6
+alter table public.profiles add column if not exists report_formats text not null default 'xlsx';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'profiles_send_hour_range') then
+    alter table public.profiles add constraint profiles_send_hour_range
+      check (send_hour between 0 and 23);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'profiles_send_weekday_range') then
+    alter table public.profiles add constraint profiles_send_weekday_range
+      check (send_weekday between 0 and 6);
+  end if;
+end $$;
+
+-- Re-grant UPDATE to include the new columns. last_report_at and
+-- last_manual_report_at stay server-owned and are deliberately absent.
+revoke update on public.profiles from authenticated;
+grant  update (church_name, destination_emails, report_frequency, business_address,
+               phone, timezone, send_hour, send_weekday, report_formats)
+  on public.profiles to authenticated;

@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
 import { encryptToken } from '../../../../lib/crypto';
+import { portalBaseUrl } from '../../../../lib/portalUrl';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,14 @@ function sameToken(a, b) {
 // Every exit from this route clears the state cookie so a stale value can never
 // be replayed against a later attempt.
 function redirectTo(path) {
-  const res = NextResponse.redirect(`${process.env.PORTAL_URL}${path}`);
+  const { url: portal } = portalBaseUrl();
+  // A malformed PORTAL_URL would make NextResponse.redirect throw, turning a
+  // handled error into a 500 with no explanation.
+  if (!portal) {
+    console.error('PORTAL_URL is missing or malformed; cannot redirect.');
+    return new NextResponse('Portal is misconfigured. Please email info@omnignis.com.', { status: 500 });
+  }
+  const res = NextResponse.redirect(`${portal}${path}`);
   res.cookies.set(STATE_COOKIE, '', {
     httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 0,
   });
@@ -81,7 +89,7 @@ export async function GET(request) {
   const profileId = st.profile_id;
 
   try {
-    const redirectUri = `${process.env.PORTAL_URL}/api/facebook/callback`;
+    const redirectUri = `${portalBaseUrl().url}/api/facebook/callback`;
 
     // 1. Code -> short-lived user token
     const tok = await graph('/oauth/access_token', {

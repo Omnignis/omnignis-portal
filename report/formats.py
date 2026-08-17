@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""
+Report exporters for the Omnignis livestream report.
+
+One builder per format. Each takes (church_name, rows, period_label) and
+returns raw bytes, so report.py can attach any combination to one email.
+
+rows is a list of dicts: {date, title, total_views, unique_viewers}
+"""
+
+import io
+import csv
+
+HEADERS = ["Livestream Date", "Title", "Total Views", "Unique Viewers"]
+
+EMBER = "FF6A1A"
+EMBER_HEX = "#ff6a1a"
+DARK_HEX = "#0d0f14"
+
+# Formats offered to churches, in the order they appear in the UI.
+SUPPORTED = ["xlsx", "pdf", "csv", "docx", "txt", "png"]
+
+EXTENSION = {
+    "xlsx": "xlsx", "pdf": "pdf", "csv": "csv",
+    "docx": "docx", "txt": "txt", "png": "png",
+}
+
+LABEL = {
+    "xlsx": "Excel", "pdf": "PDF", "csv": "CSV",
+    "docx": "Word", "txt": "Plain text", "png": "Image (PNG)",
+}
+
+
+# --------------------------------------------------------------------------
+# Spreadsheet formula injection guard.
+#
+# A video titled "=HYPERLINK(...)" or "+1-555-..." is a live formula the moment
+# Excel or Sheets opens the file. Church staff open these attachments without
+# thinking about it. Prefixing with an apostrophe makes the cell text.
+# Only strings are touched, so real numbers are never mangled.
+# --------------------------------------------------------------------------
+_RISKY_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def sanitize_cell(value):
+    if isinstance(value, str) and value[:1] in _RISKY_PREFIXES:
+        return "'" + value
+    return value
+
+
+def _totals(rows):
+    return (
+        sum(r.get("total_views") or 0 for r in rows),
+        sum(r.get("unique_viewers") or 0 for r in rows),
+    )
+
+
+# ----------------------------- xlsx -----------------------------
+def build_xlsx(church_name: str, rows: list, period_label: str) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Livestream Report"
+    thin = Side(style="thin", color="DDDDDD")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.merge_cells("A1:D1")
+    ws["A1"] = sanitize_cell(church_name)
+    ws["A1"].font = Font(size=16, bold=True, color="0D0F14")
+    ws.merge_cells("A2:D2")
+    ws["A2"] = f"Livestream attendance report  |  {period_label}"
+    ws["A2"].font = Font(size=10, italic=True, color="666666")
+
+    ws.append([])
+    ws.append(HEADERS)
+    header_row = ws.max_row
+    for col in range(1, 5):
+        c = ws.cell(row=header_row, column=col)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor=EMBER)
+        c.alignment = Alignment(horizontal="center")
+        c.border = border
+
+    for row in rows:
+        ws.append([
+            sanitize_cell(row["date"]),
+            sanitize_cell(row["title"]),
+            row["total_views"],
+            row["unique_viewers"],
+        ])
+        for col in range(1, 5):
+            ws.cell(row=ws.max_row, column=col).border = border
+
+    tv, tu = _totals(rows)
+    ws.append(["", "Total", tv, tu])
+    for col in range(1, 5):
+        c = ws.cell(row=ws.max_row, column=col)
+        c.font = Font(bold=True)
+        c.fill = PatternFill("solid", fgColor="F0F0F0")
+        c.border = border
+
+    for col, width in zip("ABCD", (20, 42, 14, 16)):
+        ws.column_dimensions[col].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ----------------------------- csv ------------------------------
+def build_csv(church_name: str, rows: list, period_label: str) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
+    w.writerow([sanitize_cell(church_name)])
+    w.writerow([f"Livestream attendance report | {period_label}"])
+    w.writerow([])
+    w.writerow(HEADERS)
+    for r in rows:
+        w.writerow([
+            sanitize_cell(r["date"]), sanitize_cell(r["title"]),
+            r["total_views"], r["unique_viewers"],
+        ])
+    tv, tu = _totals(rows)
+    w.writerow(["", "Total", tv, tu])
+    # BOM so Excel opens UTF-8 correctly on Windows.
+    return buf.getvalue().encode("utf-8-sig")
+
+
+# ----------------------------- txt ------------------------------
+def build_txt(church_name: str, rows: list, period_label: str) -> bytes:
+    widths = [16, 44, 12, 15]
+    def line(cells, fill=" "):
+        return fill.join(str(c)[:w].ljust(w) for c, w in zip(cells, widths)).rstrip()
+
+    out = [church_name, f"Livestream attendance report | {period_label}", ""]
+    out.append(line(HEADERS))
+    out.append("-" * (sum(widths) + len(widths) - 1))
+    for r in rows:
+        out.append(line([r["date"], r["title"], r["total_views"], r["unique_viewers"]]))
+    tv, tu = _totals(rows)
+    out.append("-" * (sum(widths) + len(widths) - 1))
+    out.append(line(["", "Total", tv, tu]))
+    out.append("")
+    out.append("Generated by Omnignis")
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
+# ----------------------------- pdf ------------------------------
+def build_pdf(church_name: str, rows: list, period_label: str) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        leftMargin=0.7 * inch, rightMargin=0.7 * inch,
+        topMargin=0.7 * inch, bottomMargin=0.7 * inch,
+        title=f"{church_name} livestream report",
+    )
+    styles = getSampleStyleSheet()
+    h = ParagraphStyle("H", parent=styles["Heading1"], fontSize=17, leading=21,
+                       textColor=colors.HexColor(DARK_HEX), spaceAfter=2)
+    sub = ParagraphStyle("S", parent=styles["Normal"], fontSize=9.5,
+                         textColor=colors.HexColor("#666666"), spaceAfter=16)
+    cell = ParagraphStyle("C", parent=styles["Normal"], fontSize=9, leading=12)
+
+    data = [HEADERS]
+    for r in rows:
+        data.append([r["date"], Paragraph(str(r["title"]), cell),
+                     f'{r["total_views"]:,}', f'{r["unique_viewers"]:,}'])
+    tv, tu = _totals(rows)
+    data.append(["", "Total", f"{tv:,}", f"{tu:,}"])
+
+    table = Table(data, colWidths=[1.2 * inch, 3.3 * inch, 1.1 * inch, 1.3 * inch], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(EMBER_HEX)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+        ("ALIGN", (0, 0), (1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F0F0F0")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#FAFAFA")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    doc.build([
+        Paragraph(church_name, h),
+        Paragraph(f"Livestream attendance report &nbsp;|&nbsp; {period_label}", sub),
+        table, Spacer(1, 18),
+        Paragraph("Generated by Omnignis", sub),
+    ])
+    return buf.getvalue()
+
+
+# ----------------------------- docx -----------------------------
+def build_docx(church_name: str, rows: list, period_label: str) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    def shade(cell, hex_colour):
+        el = OxmlElement("w:shd")
+        el.set(qn("w:val"), "clear")
+        el.set(qn("w:fill"), hex_colour)
+        cell._tc.get_or_add_tcPr().append(el)
+
+    doc = Document()
+    title = doc.add_paragraph()
+    run = title.add_run(church_name)
+    run.bold = True
+    run.font.size = Pt(17)
+    run.font.color.rgb = RGBColor(0x0D, 0x0F, 0x14)
+
+    meta = doc.add_paragraph()
+    mrun = meta.add_run(f"Livestream attendance report  |  {period_label}")
+    mrun.italic = True
+    mrun.font.size = Pt(9.5)
+    mrun.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    table = doc.add_table(rows=1, cols=4)
+    table.style = "Table Grid"
+    for i, head in enumerate(HEADERS):
+        c = table.rows[0].cells[i]
+        c.text = ""
+        r = c.paragraphs[0].add_run(head)
+        r.bold = True
+        r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        r.font.size = Pt(9)
+        c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        shade(c, EMBER)
+
+    for row in rows:
+        cells = table.add_row().cells
+        for i, v in enumerate([row["date"], row["title"],
+                               f'{row["total_views"]:,}', f'{row["unique_viewers"]:,}']):
+            cells[i].text = str(v)
+            for p in cells[i].paragraphs:
+                for r in p.runs:
+                    r.font.size = Pt(9)
+
+    tv, tu = _totals(rows)
+    cells = table.add_row().cells
+    for i, v in enumerate(["", "Total", f"{tv:,}", f"{tu:,}"]):
+        cells[i].text = ""
+        r = cells[i].paragraphs[0].add_run(str(v))
+        r.bold = True
+        r.font.size = Pt(9)
+        shade(cells[i], "F0F0F0")
+
+    footer = doc.add_paragraph()
+    frun = footer.add_run("Generated by Omnignis")
+    frun.italic = True
+    frun.font.size = Pt(8.5)
+    frun.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+# ----------------------------- png ------------------------------
+def build_png(church_name: str, rows: list, period_label: str) -> bytes:
+    import matplotlib
+    matplotlib.use("Agg")                       # no display in CI
+    import matplotlib.pyplot as plt
+
+    tv, tu = _totals(rows)
+    body = [[r["date"], str(r["title"])[:52], f'{r["total_views"]:,}',
+             f'{r["unique_viewers"]:,}'] for r in rows]
+    body.append(["", "Total", f"{tv:,}", f"{tu:,}"])
+
+    # Explicit geometry. A full-figure axes with loc="upper center" made the
+    # title overlap the table and left dead space underneath, so the header
+    # band and the table each get their own reserved height.
+    header_in = 1.0
+    row_in = 0.36
+    n_rows = len(body) + 1                      # + the header row
+    table_in = row_in * n_rows
+    fig_w, fig_h = 10.5, header_in + table_in + 0.22
+
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=170)
+    fig.patch.set_facecolor("white")
+
+    fig.text(0.014, 1 - 0.30 / fig_h, church_name,
+             fontsize=16, fontweight="bold", color=DARK_HEX, va="top")
+    fig.text(0.014, 1 - 0.72 / fig_h,
+             f"Livestream attendance report  |  {period_label}",
+             fontsize=9.5, color="#666666", va="top", style="italic")
+
+    ax = fig.add_axes([0.014, 0.16 / fig_h, 0.972, table_in / fig_h])
+    ax.axis("off")
+
+    # bbox makes the table fill the axes exactly, so row heights are even and
+    # nothing needs scale() guesswork.
+    table = ax.table(cellText=body, colLabels=HEADERS,
+                     colWidths=[0.16, 0.50, 0.15, 0.19],
+                     cellLoc="center", bbox=[0, 0, 1, 1])
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+
+    last = len(body)
+    for (r, c), cellobj in table.get_celld().items():
+        cellobj.set_edgecolor("#DDDDDD")
+        cellobj.set_linewidth(0.6)
+        if r == 0:
+            cellobj.set_facecolor(EMBER_HEX)
+            cellobj.set_text_props(color="white", fontweight="bold")
+        elif r == last:
+            cellobj.set_facecolor("#F0F0F0")
+            cellobj.set_text_props(fontweight="bold")
+        elif r % 2 == 0:
+            cellobj.set_facecolor("#FAFAFA")
+        else:
+            cellobj.set_facecolor("white")
+        if r > 0 and c in (2, 3):
+            cellobj.set_text_props(ha="right")
+            cellobj.PAD = 0.04
+        elif r > 0 and c == 1:
+            cellobj.set_text_props(ha="left")
+            cellobj.PAD = 0.03
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor="white", bbox_inches="tight", pad_inches=0.12)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+BUILDERS = {
+    "xlsx": build_xlsx, "pdf": build_pdf, "csv": build_csv,
+    "docx": build_docx, "txt": build_txt, "png": build_png,
+}
+
+
+def parse_formats(raw: str) -> list:
+    """Turn the stored comma-separated preference into a clean ordered list."""
+    wanted = {f.strip().lower() for f in (raw or "").split(",") if f.strip()}
+    ordered = [f for f in SUPPORTED if f in wanted]
+    return ordered or ["xlsx"]          # never send an email with no report
+
+
+def build_all(church_name: str, rows: list, period_label: str, formats: list) -> list:
+    """Returns [(filename, bytes), ...] for every requested format."""
+    safe_name = "".join(ch if ch.isalnum() or ch in " -_" else "" for ch in church_name)
+    safe_name = safe_name.strip().replace(" ", "_") or "church"
+    stamp = period_label.replace(" ", "_").replace("|", "-").replace("/", "-")
+    out = []
+    for fmt in formats:
+        builder = BUILDERS.get(fmt)
+        if not builder:
+            continue
+        data = builder(church_name, rows, period_label)
+        out.append((f"{safe_name}_livestream_report_{stamp}.{EXTENSION[fmt]}", data))
+    return out

@@ -48,6 +48,12 @@ export default function Signup() {
           church_name: form.church_name.trim(),
           destination_emails: recipients().join(', ') || form.email,
           report_frequency: form.report_frequency,
+          // Seed the timezone from the browser so report dates are correct
+          // before the church ever opens the settings page.
+          timezone: (() => {
+            try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago'; }
+            catch (e) { return 'America/Chicago'; }
+          })(),
         },
       },
     });

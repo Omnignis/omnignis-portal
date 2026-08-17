@@ -23,12 +23,13 @@ import re
 import base64
 import hmac
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dtime
+from zoneinfo import ZoneInfo
 
 import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+import formats
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SERVICE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -85,18 +86,108 @@ def sb_patch(table: str, match: str, body: dict) -> None:
     r.raise_for_status()
 
 
-def is_due(frequency: str, today: datetime) -> bool:
-    if frequency == "daily":
-        return True
+DEFAULT_TZ = "America/Chicago"
+DEFAULT_SEND_HOUR = 13          # 1pm local
+DEFAULT_SEND_WEEKDAY = 6        # Sunday (Mon=0 .. Sun=6)
+
+
+def tz_for(p: dict) -> ZoneInfo:
+    """A church's timezone, falling back rather than crashing the whole run."""
+    name = (p.get("timezone") or "").strip() or DEFAULT_TZ
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        print(f"WARNING: unknown timezone {name!r}, falling back to {DEFAULT_TZ}")
+        return ZoneInfo(DEFAULT_TZ)
+
+
+def period_anchor(local_date, frequency: str, send_weekday: int):
+    """The date the current reporting period is keyed to, in local time."""
     if frequency == "weekly":
-        return today.weekday() == 6          # Sunday
+        return local_date - timedelta(days=(local_date.weekday() - send_weekday) % 7)
     if frequency == "monthly":
-        return today.day == 1
-    return False
+        return local_date.replace(day=1)
+    return local_date                      # daily
+
+
+def due_at(p: dict, tz: ZoneInfo):
+    """The local datetime this church's current report was scheduled for."""
+    frequency = p.get("report_frequency") or "weekly"
+    hour = int(p.get("send_hour") if p.get("send_hour") is not None else DEFAULT_SEND_HOUR)
+    weekday = int(p.get("send_weekday") if p.get("send_weekday") is not None else DEFAULT_SEND_WEEKDAY)
+    anchor = period_anchor(datetime.now(tz).date(), frequency, weekday)
+    # fold=0 picks the first instance of an ambiguous local hour when DST ends.
+    return datetime.combine(anchor, dtime(hour=hour, fold=0), tzinfo=tz)
+
+
+def is_due(p: dict, tz: ZoneInfo) -> bool:
+    """
+    True when this church's scheduled moment has passed and we have not already
+    sent for that moment.
+
+    Checking "have we sent since the scheduled time" rather than "is it exactly
+    that hour" means a delayed or skipped run still catches up on the next
+    hourly pass, and a run that fires twice cannot double-send.
+    """
+    scheduled = due_at(p, tz)
+    if datetime.now(tz) < scheduled:
+        return False
+    last = p.get("last_report_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+            if last_dt >= scheduled:
+                return False
+        except ValueError:
+            pass                            # unparseable, treat as never sent
+    return True
 
 
 def lookback_days(frequency: str) -> int:
     return {"daily": 2, "weekly": 8, "monthly": 32}.get(frequency, 8)
+
+
+def local_date_str(created_time: str, tz: ZoneInfo) -> str:
+    """
+    Facebook returns UTC like 2026-08-16T23:30:00+0000. Slicing the first ten
+    characters dated a Sunday evening service as Monday for every church west
+    of Greenwich, which is most of them.
+    """
+    if not created_time:
+        return ""
+    raw = created_time.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
+        try:
+            return datetime.strptime(raw, fmt).astimezone(tz).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(tz).strftime("%Y-%m-%d")
+    except ValueError:
+        return raw[:10]                     # last resort, previous behaviour
+
+
+def filter_livestreams(videos: list) -> list:
+    """
+    Keep only broadcasts that were actually live.
+
+    live_status is present on videos that were streamed. If NO video in the
+    batch carries the field, Graph is not returning it for this page, and
+    filtering would produce an empty report. In that case keep everything and
+    say so loudly, because inflated numbers are better caught by a human than
+    an empty attachment.
+    """
+    if not videos:
+        return []
+    live = [v for v in videos if v.get("live_status")]
+    if live:
+        skipped = len(videos) - len(live)
+        if skipped:
+            print(f"   filtered out {skipped} non-livestream video(s)")
+        return live
+    print("   WARNING: Graph returned no live_status on any video for this page. "
+          "Including all videos, which may overstate attendance. Verify this page's data.")
+    return videos
 
 
 def latest_livestream_only(videos: list) -> list:
@@ -168,68 +259,18 @@ def fetch_metrics(video_id: str, token: str) -> dict:
     return out
 
 
-# ----------------------- excel -----------------------
-def build_workbook(church_name: str, rows: list, period_label: str) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Livestream Report"
-
-    ember = "FF6A1A"
-    dark = "0D0F14"
-    thin = Side(style="thin", color="DDDDDD")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    ws.merge_cells("A1:D1")
-    ws["A1"] = church_name
-    ws["A1"].font = Font(size=16, bold=True, color=dark)
-    ws.merge_cells("A2:D2")
-    ws["A2"] = f"Livestream attendance report  ·  {period_label}"
-    ws["A2"].font = Font(size=10, italic=True, color="666666")
-
-    headers = ["Livestream Date", "Title", "Total Views", "Unique Viewers"]
-    ws.append([])
-    ws.append(headers)
-    header_row = ws.max_row
-    for col in range(1, 5):
-        c = ws.cell(row=header_row, column=col)
-        c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", fgColor=ember)
-        c.alignment = Alignment(horizontal="center")
-        c.border = border
-
-    total_v = total_u = 0
-    for row in rows:
-        ws.append([row["date"], row["title"], row["total_views"], row["unique_viewers"]])
-        total_v += row["total_views"] or 0
-        total_u += row["unique_viewers"] or 0
-        for col in range(1, 5):
-            ws.cell(row=ws.max_row, column=col).border = border
-
-    ws.append(["", "Total", total_v, total_u])
-    for col in range(1, 5):
-        c = ws.cell(row=ws.max_row, column=col)
-        c.font = Font(bold=True)
-        c.fill = PatternFill("solid", fgColor="F0F0F0")
-        c.border = border
-
-    ws.column_dimensions["A"].width = 20
-    ws.column_dimensions["B"].width = 42
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 16
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
 # ----------------------- email -----------------------
-def send_email(to_list: list, subject: str, html: str, filename: str, content: bytes) -> None:
+def send_email(to_list: list, subject: str, html: str, attachments: list) -> None:
+    """attachments: [(filename, bytes), ...] so a church can receive several formats."""
     payload = {
         "from": f"Omnignis Reports <{FROM_EMAIL}>",
         "to": to_list,
         "subject": subject,
         "html": html,
-        "attachments": [{"filename": filename, "content": base64.b64encode(content).decode()}],
+        "attachments": [
+            {"filename": name, "content": base64.b64encode(data).decode()}
+            for name, data in attachments
+        ],
     }
     r = requests.post(
         "https://api.resend.com/emails",
@@ -243,7 +284,7 @@ def send_email(to_list: list, subject: str, html: str, filename: str, content: b
 # ----------------------- main -----------------------
 def main():
     today = datetime.now(timezone.utc)
-    profiles = sb_get("profiles", "select=id,church_name,destination_emails,report_frequency,last_report_at")
+    profiles = sb_get("profiles", "select=id,church_name,destination_emails,report_frequency,last_report_at,timezone,send_hour,send_weekday,report_formats")
     connections = {
         c["profile_id"]: c
         for c in sb_get("facebook_connections", "select=profile_id,page_id,page_name,token_ciphertext")
@@ -266,8 +307,9 @@ def main():
                 print("ERROR: that church has no completed Facebook connection")
                 raise SystemExit(1)
             continue
+        tz = tz_for(p)
         # A manual run is an explicit request, so the schedule does not apply.
-        if not IS_MANUAL and not is_due(p.get("report_frequency", "weekly"), today):
+        if not IS_MANUAL and not is_due(p, tz):
             continue
 
         try:
@@ -279,9 +321,12 @@ def main():
             elif p.get("last_report_at"):
                 since = datetime.fromisoformat(p["last_report_at"].replace("Z", "+00:00"))
             else:
-                since = today - timedelta(days=lookback_days(p["report_frequency"]))
+                since = today - timedelta(days=lookback_days(p.get("report_frequency") or "weekly"))
 
             videos = fetch_videos(conn["page_id"], token, since)
+            # Applies to scheduled runs too. Counting uploaded clips and promos
+            # as attendance overstated the numbers churches report to a diocese.
+            videos = filter_livestreams(videos)
             if REPORT_MODE == "latest":
                 videos = latest_livestream_only(videos)
                 if not videos:
@@ -290,19 +335,22 @@ def main():
             rows = []
             for vid in videos:
                 m = fetch_metrics(vid["id"], token)
-                created = vid.get("created_time", "")[:10]
                 rows.append({
-                    "date": created,
+                    "date": local_date_str(vid.get("created_time", ""), tz),
                     "title": vid.get("title") or vid.get("description", "")[:60] or "Livestream",
                     "total_views": m["total_views"],
                     "unique_viewers": m["unique_viewers"],
                 })
+            rows.sort(key=lambda r: r["date"], reverse=True)
 
             if REPORT_MODE == "latest" and rows:
                 period = rows[0]["date"]
             else:
-                period = f"{since.date()} to {today.date()}"
-            xlsx = build_workbook(p["church_name"], rows, period)
+                period = (f"{since.astimezone(tz).date()} to "
+                          f"{datetime.now(tz).date()}")
+
+            chosen = formats.parse_formats(p.get("report_formats"))
+            attachments = formats.build_all(p["church_name"], rows, period, chosen)
             recipients = [e.strip() for e in (p["destination_emails"] or "").split(",") if e.strip()]
             if not recipients:
                 continue
@@ -311,10 +359,10 @@ def main():
                 f"<p>Hello {p['church_name']},</p>"
                 f"<p>Attached is your livestream attendance report for <b>{period}</b> "
                 f"({len(rows)} livestream{'s' if len(rows) != 1 else ''}).</p>"
+                f"<p>Attached as: {', '.join(formats.LABEL[f] for f in chosen)}.</p>"
                 f"<p>Omnignis Technologies</p>"
             )
-            fname = f"{p['church_name'].replace(' ', '_')}_livestream_report_{today.date()}.xlsx"
-            send_email(recipients, f"Livestream report: {p['church_name']}", html, fname, xlsx)
+            send_email(recipients, f"Livestream report: {p['church_name']}", html, attachments)
 
             # Only a scheduled run advances last_report_at. If a manual run moved
             # it, the next scheduled report would skip everything in between.
@@ -323,7 +371,8 @@ def main():
             else:
                 sb_patch("profiles", f"id=eq.{p['id']}", {"last_report_at": today.isoformat()})
             processed += 1
-            print(f"OK: sent report to {p['church_name']} ({len(rows)} videos)")
+            print(f"OK: sent report to {p['church_name']} "
+                  f"({len(rows)} livestream(s), formats: {','.join(chosen)}, tz: {tz})")
         except Exception as e:
             failed += 1
             print(f"ERROR for {p.get('church_name')}: {redact(e)}")
